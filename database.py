@@ -1,116 +1,102 @@
-import psycopg2
-from config import DB_CONFIG
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
+from models import Users, Categories, Words, Translations, UserWords
+from config import SessionLocal
+from sqlalchemy import func
 import random
-
-def connect():
-    """
-    Устанавливаем соединение с БД.
-    """        
-    return psycopg2.connect(**DB_CONFIG)
 
 
 def new_user(user_data):
-    print("Получен пользователь:", user_data.id, user_data.first_name)
-
-    conn = connect()  
-    cur = conn.cursor()
-    print("[DEBUG] Подключение к БД установлено")
-
-    telegram_id = user_data.id
-    username = user_data.username
-    first_name = user_data.first_name
-    last_name = user_data.last_name if user_data.last_name else None
-
+    """
+    Регистрирует пользователя, если его ещё нет в базе.
+    Возвращает ID пользователя.
+    """
+    session: Session = SessionLocal()
     try:
-        cur.execute("SELECT id FROM users WHERE telegram_id = %s", (telegram_id,))
-        result = cur.fetchone()
-        if result:
-            print(f"Пользователь {telegram_id} уже существует. ID: {result[0]}")
-            cur.close()
-            return result[0]
+        user = session.query(Users).filter_by(telegram_id=user_data.id).first()
+        if user:
+            return user.id
 
-        cur.execute("""
-            INSERT INTO users (telegram_id, username, first_name, last_name)
-            VALUES (%s, %s, %s, %s)
-            RETURNING id;
-        """, (telegram_id, username, first_name, last_name))
+        new_user = Users(
+            telegram_id=user_data.id,
+            username=user_data.username,
+            first_name=user_data.first_name,
+            last_name=user_data.last_name
+        )
+        session.add(new_user)
+        session.flush()  # получаем ID, но без commit
+        return new_user.id
 
-        new_id = cur.fetchone()[0]
-        print(f"Добавлен новый пользователь: {telegram_id}, ID: {new_id}")
-        conn.commit()  
-        return new_id
-
-    except Exception as e:
+    except SQLAlchemyError as e:
+        session.rollback()
         print(f"[ERROR] Ошибка при регистрации пользователя: {e}")
-        conn.rollback()
         raise
     finally:
-        cur.close()
-        conn.close()
-    
+        session.close()
 
 def get_categories():
     """
     Возвращает список всех доступных категорий.
-
     :return: список кортежей (id, name)
     """
-    with connect() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT id, name FROM categories;")
-        return cur.fetchall()
+    session: Session = SessionLocal()
+    try:
+        categories = session.query(Categories).all()
+        return [(c.id, c.name) for c in categories]
+    finally:
+        session.close()
 
 
 def get_words_by_category(category_id):
     """
     Возвращает случайное слово из указанной категории.
-
     :param category_id: id категории
     :return: (word_id, original_word, translation)
     """
-    with connect() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT w.id, w.original_word, t.translation 
-            FROM words w
-            JOIN word_categories wc ON w.id = wc.word_id
-            JOIN translations t ON w.id = t.word_id
-            WHERE wc.category_id = %s
-            ORDER BY RANDOM()
-            LIMIT 1;
-        """, (category_id,))
-        return cur.fetchone()
+    session: Session = SessionLocal()
+    try:
+        category = session.query(Categories).get(category_id)
+        if not category or not category.word:
+            return None
+
+        word = random.choice(category.word)
+        if not word.translations:
+            return None
+
+        translation = random.choice(word.translations)
+        return word.id, word.original_word, translation.translation
+
+    finally:
+        session.close()
 
 
 def get_word_and_vars():
     """
     Возвращает случайное слово и варианты перевода (1 правильный + 3 неправильных).
-
     :return: (original_word, options, correct_translation)
     """
-    with connect() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT w.id, w.original_word, t.translation 
-            FROM words w
-            JOIN translations t ON w.id = t.word_id
-            ORDER BY RANDOM() LIMIT 1;
-        """)
-        correct = cur.fetchone()
+    session: Session = SessionLocal()
+    try:
+        word = session.query(Words).order_by(func.random()).first()
+        if not word or not word.translations:
+            return None
 
-        word_id, original, correct_translation = correct
+        correct_translation = random.choice(word.translations).translation
 
-        cur.execute("""
-            SELECT translation FROM translations
-            WHERE word_id != %s
-            ORDER BY RANDOM() LIMIT 3;
-        """, (word_id,))
-
-        wrong_translations = [row[0] for row in cur.fetchall()]
-        options = [correct_translation] + wrong_translations
+        wrongs = (
+            session.query(Translations)
+            .filter(Translations.word_id != word.id)
+            .order_by(func.random())
+            .limit(3)
+            .all()
+        )
+        options = [correct_translation] + [w.translation for w in wrongs]
         random.shuffle(options)
 
-        return original, options, correct_translation
+        return word.original_word, options, correct_translation
+
+    finally:
+        session.close()
 
 
 def add_word(user_id, original, translation, example):
@@ -123,37 +109,30 @@ def add_word(user_id, original, translation, example):
     :param example: пример использования
     :return: True если успешно, иначе False
     """
-    with connect() as conn:
-        cur = conn.cursor()
-
-        # Проверяем, есть ли уже такое слово
-        cur.execute("SELECT id FROM words WHERE original_word = %s", (original,))
-        word_row = cur.fetchone()
-
-        if word_row:
-            word_id = word_row[0]
-        else:
-            # Добавляем новое слово
-            cur.execute("""
-                INSERT INTO words (original_word, example)
-                VALUES (%s, %s) RETURNING id
-            """, (original, example))
-            word_id = cur.fetchone()[0]
+    session: Session = SessionLocal()
+    try:
+        word = session.query(Words).filter_by(original_word=original).first()
+        if not word:
+            word = Words(original_word=original, example=example)
+            session.add(word)
+            session.flush()
 
         # Добавляем перевод
-        cur.execute("""
-            INSERT INTO translations (word_id, translation)
-            VALUES (%s, %s)
-        """, (word_id, translation))
+        t = Translations(word_id=word.id, translation=translation)
+        session.add(t)
 
-        # Связываем пользователем со словом
-        cur.execute("""
-            INSERT INTO user_words (user_id, word_id)
-            VALUES (%s, %s)
-        """, (user_id, word_id))
+        # Связываем с пользователем
+        link = UserWords(user_id=user_id, word_id=word.id)
+        session.add(link)
 
-        conn.commit()
+        session.commit()
         return True
+    except SQLAlchemyError as e:
+        session.rollback()
+        print(f"[ERROR] Ошибка при добавлении слова: {e}")
+        return False
+    finally:
+        session.close()
 
 
 def delete_word(user_id, original_word):
@@ -164,26 +143,46 @@ def delete_word(user_id, original_word):
     :param original_word: слово на родном языке
     :return: True если удалено, иначе False
     """
-    with connect() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            DELETE FROM user_words
-            USING words
-            WHERE user_words.user_id = %s
-              AND words.original_word = %s
-              AND user_words.word_id = words.id;
-        """, (user_id, original_word))
-        conn.commit()
-        return cur.rowcount > 0
+    session = SessionLocal()
+    try:
+        # Приводим к нижнему регистру
+        word = (
+            session.query(Words)
+            .filter(func.lower(Words.original_word) == original_word.lower())
+            .first())
 
+        if not word:
+            return False
+
+        link = (
+            session.query(UserWords)
+            .filter_by(user_id=user_id, word_id=word.id)
+            .first())
+
+        if not link:
+            return False
+
+        session.delete(link)
+        session.commit()
+        return True
+
+    except SQLAlchemyError as e:
+        session.rollback()
+        print(f"[ERROR] Ошибка при удалении слова: {e}")
+        return False
+    finally:
+        session.close()
 
 def get_wrong_translations(word_id):
-    with connect() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT translation FROM translations
-            WHERE word_id != %s
-            ORDER BY RANDOM() LIMIT 3;
-        """, (word_id,))
-        return [row[0] for row in cur.fetchall()]
-
+    session: Session = SessionLocal()
+    try:
+        wrongs = (
+            session.query(Translations)
+            .filter(Translations.word_id != word_id)
+            .order_by(func.random())
+            .limit(3)
+            .all()
+        )
+        return [t.translation for t in wrongs]
+    finally:
+        session.close()
