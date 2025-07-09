@@ -2,6 +2,8 @@
 import telebot
 from telebot import types
 
+from config import init_bd
+
 # Импортируем функции работы с БД через SQLAlchemy ORM
 from database import (
     new_user,
@@ -86,20 +88,20 @@ def choose_category(message):
 def category(call):
     category_id = int(call.data.split("_")[1])  # Получаем ID категории из текста
     user_states[call.from_user.id] = {'category_id': category_id, 'attempts': 0}  # Сохраняем состояние
-    send_next_word(call.from_user.id, category_id)  # Отправляем слово из категории
+    send_next_word(call.message.chat.id, call.from_user.id, category_id)  # Отправляем слово из категории
 
 
 # Отправка следующего слова
-def send_next_word(chat_id, category_id=None):
+def send_next_word(chat_id, user_id, category_id=None):
     if category_id:
-        word_data = get_words_by_category(category_id)  # Получаем слово по категории
+        word_data = get_words_by_category(category_id, user_id)  # Получаем слово по категории
         if not word_data:
             bot.send_message(chat_id, "Нет больше слов в этой категории.")
             menu(chat_id)
             return
 
         word_id, original, correct_translation = word_data
-        wrong_translations = get_wrong_translations(word_id)  # Получаем 3 неверных перевода
+        wrong_translations = get_wrong_translations(word_id, user_id)  # Получаем 3 неверных перевода
         options = [correct_translation] + wrong_translations
         random.shuffle(options)  # Перемешиваем варианты
 
@@ -110,7 +112,7 @@ def send_next_word(chat_id, category_id=None):
         }
 
     else:
-        result = get_word_and_vars()  # Получаем случайное слово и варианты
+        result = get_word_and_vars(user_id)  # Получаем случайное слово и варианты
         if not result:
             bot.send_message(chat_id, "Нет доступных слов.")
             menu(chat_id)
@@ -142,7 +144,7 @@ def send_next_word(chat_id, category_id=None):
 # Обработка кнопки "Учить слова"
 @bot.message_handler(func=lambda m: m.text == '🧠 Учить слова')
 def lear_words(message):
-    send_next_word(message.chat.id)
+    send_next_word(message.chat.id, message.from_user.id)
 
 # Обработка добавления слова
 @bot.message_handler(func=lambda m: m.text == '📝 Добавить слово')
@@ -172,9 +174,9 @@ def handle_input(message):
         if text == state['correct']:
             bot.send_message(chat_id, "✅ Правильно!")
             if state.get('category_id') is not None:
-                send_next_word(chat_id, state['category_id'])
+                send_next_word(chat_id, message.from_user.id, state['category_id'])
             else:
-                send_next_word(chat_id)
+                send_next_word(chat_id, message.from_user.id)
         else:
             attempts = state.get('attempts', 0) + 1
             if attempts < 2:
@@ -243,5 +245,7 @@ def handle_delete_word_text(message):
 
 
 if __name__ == '__main__':
-    print('Бот запущен')
+    init_bd()
+    print('База данных инициализирована')
+    print('Бот запущен, кусь')
     bot.polling(none_stop=True)

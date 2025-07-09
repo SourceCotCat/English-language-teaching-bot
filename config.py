@@ -2,6 +2,8 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from models import Base
+from init import words 
 
 load_dotenv() # загружаем переменные из .env файла
 
@@ -19,3 +21,9 @@ DATABASE_URL = f"postgresql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@" \
 
 engine = create_engine(DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+def init_bd():
+    Base.metadata.create_all(bind=engine)
+
+    with SessionLocal() as db:
+        words(db)
