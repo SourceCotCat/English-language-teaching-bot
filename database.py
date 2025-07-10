@@ -115,11 +115,12 @@ def add_word(user_id, original, translation, example):
                 # создаём новое слово для пользователя
                 word = Word(original_word=original, example=example, user_id=user_id)
                 session.add(word)
+                session.flush() 
 
             # проверяем, есть ли уже такой перевод у этого слова
             existing_translation = (
                 session.query(Translation)
-                .filter_by(word=word, translation=translation)
+                .filter_by(word_id=word.id, translation=translation)
                 .first()
             )
             if not existing_translation:

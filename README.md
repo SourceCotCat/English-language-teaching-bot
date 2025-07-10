@@ -17,4 +17,3 @@ Telegram-бот для изучения английских слов.
     pip install -r requirements.txt
 
 Создайте файл .env в корне проекта и заполните его по примеру env_example.py.
-

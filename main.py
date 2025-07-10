@@ -143,7 +143,7 @@ def send_next_word(chat_id, user_id, category_id=None):
 
 # Обработка кнопки "Учить слова"
 @bot.message_handler(func=lambda m: m.text == '🧠 Учить слова')
-def lear_words(message):
+def learn_words(message):
     send_next_word(message.chat.id, message.from_user.id)
 
 # Обработка добавления слова
@@ -226,7 +226,7 @@ def handle_input(message):
 # Поддержка ввода через текст 
 @bot.message_handler(func=lambda message: message.text.lower() in ['учить слова', '🧠 учить слова'])
 def handle_learn_words_text(message):
-    lear_words(message)
+    learn_words(message)
 
 
 @bot.message_handler(func=lambda message: message.text.lower() in ['выбрать категорию', '📑 выбрать категорию'])
