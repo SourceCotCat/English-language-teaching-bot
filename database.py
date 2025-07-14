@@ -1,9 +1,10 @@
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from models import User, Category, Word, Translation, UserAnswer, word_categories  
 from config import SessionLocal
 from sqlalchemy import func
 import random
+from sqlalchemy.orm import aliased
+from sqlalchemy.sql import label
 
 
 def new_user(user_data):
@@ -68,31 +69,36 @@ def get_word_and_vars(user_id):
     :return: (original_word, options, correct_translation)
     """
     with SessionLocal() as session:
-        word = (
-            session.query(Word)
+        subquery = (
+            session.query(
+                Word.id.label("word_id"),
+                Word.original_word.label("original_word"),
+                Translation.translation.label("translation"),
+            )
+            .join(Translation, Translation.word_id == Word.id)
             .filter((Word.user_id == None) | (Word.user_id == user_id))
             .order_by(func.random())
-            .first())
+            .limit(4)
+            .subquery()
+        )
 
-        if not word or not word.translations or len(word.translations) == 0:
+        results = session.query(subquery).all()
+
+        if len(results) < 4:
             return None
 
-        correct_translation = random.choice(word.translations).translation
-        
-        wrongs = (
-        session.query(Translation)
-        .join(Word, Word.id == Translation.word_id)
-        .filter(Word.id != word.id)
-        .filter((Word.user_id == None) | (Word.user_id == user_id))
-        .order_by(func.random())
-        .limit(3)
-        .all())
+        # 1ую пару берём как основную
+        main = results[0]
+        correct_translation = main.translation
+        original_word = main.original_word
 
-        options = [correct_translation] + [w.translation for w in wrongs]
+        # Остальные 3 — как неправильные переводы
+        wrong_translations = [r.translation for r in results[1:]]
+
+        options = [correct_translation] + wrong_translations
         random.shuffle(options)
 
-        return word.original_word, options, correct_translation
-
+        return original_word, options, correct_translation
 
 
 def add_word(user_id, original, translation, example):
